@@ -87,6 +87,8 @@
     <Link>
       <AdditionalDependencies>shcore.lib;runtimeobject.lib;mfuuid.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreAllDefaultLibraries>false</IgnoreAllDefaultLibraries>
+      <GenerateDebugInformation Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</GenerateDebugInformation>
+      <AssemblyDebug Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</AssemblyDebug>
     </Link>
     <Xdcmake>
       <DocumentLibraryDependencies>false</DocumentLibraryDependencies>
@@ -114,6 +116,7 @@
     <ClInclude Include="D3D11VideoSampleProvider.h" />
     <ClInclude Include="DirectXInteropHelper.h" />
     <ClInclude Include="Enumerations.h" />
+    <ClInclude Include="ErrorHandling.h" />
     <ClInclude Include="FFmpegInteropConfig.h" />
     <ClInclude Include="FFmpegInteropLogging.h" />
     <ClInclude Include="FFmpegInteropMSS.h" />
@@ -122,6 +125,7 @@
     <ClInclude Include="FrameGrabber.h" />
     <ClInclude Include="H264AVCSampleProvider.h" />
     <ClInclude Include="IAvEffect.h" />
+    <ClInclude Include="InterruptCallback.h" />
     <ClInclude Include="KeyStringValuePair.h" />
     <ClInclude Include="LanguageTagConverter.h" />
     <ClInclude Include="NALPacketSampleProvider.h" />

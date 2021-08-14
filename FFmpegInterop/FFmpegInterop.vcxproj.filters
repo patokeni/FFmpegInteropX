@@ -189,6 +189,8 @@
     <ClInclude Include="VideoFilter.h">
       <Filter>Effects</Filter>
     </ClInclude>
+    <ClInclude Include="InterruptCallback.h" />
+    <ClInclude Include="ErrorHandling.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="..\FFmpegConfig.sh">

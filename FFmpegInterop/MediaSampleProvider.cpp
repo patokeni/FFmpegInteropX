@@ -222,7 +222,7 @@ MediaStreamSample^ MediaSampleProvider::GetNextSample()
 		LONGLONG pts = 0;
 		LONGLONG dur = 0;
 		IDirect3DSurface^ surface;
-		hr = CreateNextSampleBuffer(&buffer, pts, dur, &surface);
+		hr = FI_REPORTERR(CreateNextSampleBuffer(&buffer, pts, dur, &surface), "Error occurred while getting next sample");
 		
 		if (hr == S_OK)
 		{
@@ -257,7 +257,6 @@ MediaStreamSample^ MediaSampleProvider::GetNextSample()
 			DisableStream();
 		}
 	}
-
 	return sample;
 }
 
@@ -268,7 +267,12 @@ HRESULT MediaSampleProvider::GetNextPacket(AVPacket** avPacket, LONGLONG & packe
 	// Continue reading until there is an appropriate packet in the stream
 	while (m_packetQueue.empty())
 	{
-		if (m_pReader->ReadPacket() < 0)
+		int result = m_pReader->ReadPacket();
+		if (result != AVERROR_EOF) { // Don't regard eof as a error
+			FI_REPORTERR(result, "Error occurred while reading packet");
+		}
+		
+		if (result < 0)
 		{
 			DebugMessage(L"GetNextPacket reaching EOF\n");
 			break;
@@ -280,6 +284,10 @@ HRESULT MediaSampleProvider::GetNextPacket(AVPacket** avPacket, LONGLONG & packe
 		// read next packet and set pts values
 		auto packet = PopPacket();
 		*avPacket = packet;
+
+		if (packet->flags & AV_PKT_FLAG_CORRUPT) {
+			FI_REPORTERR(AVERROR_INVALIDDATA, "Corrupted packet read");
+		}
 
 		packetDuration = packet->duration;
 		

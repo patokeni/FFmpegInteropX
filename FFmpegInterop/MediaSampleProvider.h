@@ -24,6 +24,7 @@
 #include "Enumerations.h"
 #include "StreamInfo.h"
 #include <d3d11.h>
+#include "ErrorHandling.h"
 
 
 extern "C"
@@ -108,7 +109,6 @@ namespace FFmpegInterop
 		property String^ Language;
 		property String^ CodecName;
 		property TimeSpan LastSampleTimestamp;
-
 	internal:
 		virtual HRESULT Initialize();
 		void InitializeNameLanguageCodec();
@@ -200,7 +200,8 @@ namespace FFmpegInterop
 		DecoderEngine decoder;
 		ID3D11Device* device;
 		ID3D11DeviceContext* deviceContext;
-		
+		FFmpegInterop::ErrorContext^ errorContext = ref new FFmpegInterop::ErrorContext();
+
 	};
 }
 

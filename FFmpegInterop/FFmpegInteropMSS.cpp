@@ -56,6 +56,7 @@ using namespace Windows::ApplicationModel::Core;
 // Static functions passed to FFmpeg
 static int FileStreamRead(void* ptr, uint8_t* buf, int bufSize);
 static int64_t FileStreamSeek(void* ptr, int64_t pos, int whence);
+static int interrupt_callback(void* ptr);
 
 // Flag for ffmpeg global setup
 static bool isRegistered = false;
@@ -70,6 +71,7 @@ FFmpegInteropMSS::FFmpegInteropMSS(FFmpegInteropConfig^ interopConfig, CoreDispa
 	, isFirstSeek(true)
 	, dispatcher(dispatcher)
 {
+	errorContext->mss = this;
 	if (!isRegistered)
 	{
 		isRegisteredMutex.lock();
@@ -615,6 +617,9 @@ HRESULT FFmpegInteropMSS::CreateMediaStreamSource(String^ uri)
 		{
 			hr = E_OUTOFMEMORY;
 		}
+
+		avFormatCtx->interrupt_callback.callback = interrupt_callback;
+		avFormatCtx->interrupt_callback.opaque = reinterpret_cast<void*>(this);
 	}
 
 	if (SUCCEEDED(hr))
@@ -628,7 +633,7 @@ HRESULT FFmpegInteropMSS::CreateMediaStreamSource(String^ uri)
 		auto charStr = StringUtils::PlatformStringToUtf8String(uri);
 
 		// Open media in the given URI using the specified options
-		if (avformat_open_input(&avFormatCtx, charStr.c_str(), NULL, &avDict) < 0)
+		if (FI_REPORTERR(avformat_open_input(&avFormatCtx, charStr.c_str(), NULL, &avDict), "Error occurred while opening file") < 0)
 		{
 			hr = E_FAIL; // Error opening file
 		}
@@ -692,6 +697,9 @@ HRESULT FFmpegInteropMSS::CreateMediaStreamSource(IRandomAccessStream^ stream, M
 		{
 			hr = E_OUTOFMEMORY;
 		}
+
+		avFormatCtx->interrupt_callback.callback = interrupt_callback;
+		avFormatCtx->interrupt_callback.opaque = reinterpret_cast<void*>(this);
 	}
 
 	if (SUCCEEDED(hr))
@@ -714,7 +722,7 @@ HRESULT FFmpegInteropMSS::CreateMediaStreamSource(IRandomAccessStream^ stream, M
 
 		// Open media file using custom IO setup above instead of using file name. Opening a file using file name will invoke fopen C API call that only have
 		// access within the app installation directory and appdata folder. Custom IO allows access to file selected using FilePicker dialog.
-		if (avformat_open_input(&avFormatCtx, "", NULL, &avDict) < 0)
+		if (FI_REPORTERR(avformat_open_input(&avFormatCtx, "", NULL, &avDict), "Error occurred while opening file") < 0)
 		{
 			hr = E_FAIL; // Error opening file
 		}
@@ -792,7 +800,7 @@ HRESULT FFmpegInteropMSS::InitFFmpegContext()
 
 	if (SUCCEEDED(hr))
 	{
-		if (avformat_find_stream_info(avFormatCtx, NULL) < 0)
+		if (FI_REPORTERR(avformat_find_stream_info(avFormatCtx, NULL), "Error occurred while finding stream info") < 0)
 		{
 			hr = E_FAIL; // Error finding info
 		}
@@ -1092,7 +1100,7 @@ SubtitleProvider^ FFmpegInteropMSS::CreateSubtitleSampleProvider(AVStream* avStr
 		if (SUCCEEDED(hr))
 		{
 			// initialize the stream parameters with demuxer information
-			if (avcodec_parameters_to_context(avSubsCodecCtx, avStream->codecpar) < 0)
+			if (FI_REPORTERR(avcodec_parameters_to_context(avSubsCodecCtx, avStream->codecpar), "Error occurred while applying parameters to AVCodecContext") < 0)
 			{
 				hr = E_FAIL;
 			}
@@ -1325,6 +1333,8 @@ MediaSampleProvider^ FFmpegInteropMSS::CreateVideoStream(AVStream* avStream, int
 			{
 				// Detect video format and create video stream descriptor accordingly
 				result = CreateVideoSampleProvider(avStream, avVideoCodecCtx, index);
+				result->errorContext->mss = this;
+				result->errorContext->AVErrorHandler += ref new AVErrorEventHandler(this, &FFmpegInteropMSS::OnAVError);
 			}
 		}
 
@@ -1499,6 +1509,7 @@ MediaSampleProvider^ FFmpegInteropMSS::CreateAudioSampleProvider(AVStream* avStr
 		audioSampleProvider = ref new UncompressedAudioSampleProvider(m_pReader, avFormatCtx, avAudioCodecCtx, config, index);
 	}
 
+	audioSampleProvider->errorContext->mss = this;
 	auto hr = audioSampleProvider->Initialize();
 	if (FAILED(hr))
 	{
@@ -1730,12 +1741,14 @@ void FFmpegInteropMSS::OnSampleRequested(Windows::Media::Core::MediaStreamSource
 		if (currentAudioStream && args->Request->StreamDescriptor == currentAudioStream->StreamDescriptor)
 		{
 			auto sample = currentAudioStream->GetNextSample();
+			previousAudioSampleTime = GetCurrentDateTime();
 			args->Request->Sample = sample;
 		}
 		else if (currentVideoStream && args->Request->StreamDescriptor == currentVideoStream->StreamDescriptor)
 		{
 			CheckVideoDeviceChanged();
 			auto sample = currentVideoStream->GetNextSample();
+			previousVideoSampleTime = GetCurrentDateTime();
 			args->Request->Sample = sample;
 		}
 		else
@@ -1806,6 +1819,7 @@ void FFmpegInteropMSS::CheckVideoDeviceChanged()
 				while (true)
 				{
 					auto sample = currentVideoStream->GetNextSample();
+					previousVideoSampleTime = GetCurrentDateTime();
 					if (!sample || sample->Timestamp >= lastVideoTimestamp)
 					{
 						break;
@@ -1819,6 +1833,7 @@ void FFmpegInteropMSS::CheckVideoDeviceChanged()
 					while (true)
 					{
 						auto sample = currentAudioStream->GetNextSample();
+						previousAudioSampleTime = GetCurrentDateTime();
 						if (!sample || sample->Timestamp >= lastAudioTimestamp)
 						{
 							break;
@@ -1933,7 +1948,7 @@ HRESULT FFmpegInteropMSS::Seek(TimeSpan position, TimeSpan& actualPosition, bool
 				max = stream->ConvertPosition(referenceTime);
 			}
 
-			if (avformat_seek_file(avFormatCtx, stream->StreamIndex, min, seekTarget, max, 0) < 0)
+			if (FI_REPORTERR(avformat_seek_file(avFormatCtx, stream->StreamIndex, min, seekTarget, max, 0), "Error occurred while seeking") < 0)
 			{
 				hr = E_FAIL;
 				DebugMessage(L" - ### Error while seeking\n");
@@ -1954,7 +1969,7 @@ HRESULT FFmpegInteropMSS::Seek(TimeSpan position, TimeSpan& actualPosition, bool
 					min += stream->ConvertDuration(TimeSpan{ 50000000 });
 					seekTarget += stream->ConvertDuration(TimeSpan{ 50000000 });
 
-					if (avformat_seek_file(avFormatCtx, stream->StreamIndex, min, seekTarget, max, 0) < 0)
+					if (FI_REPORTERR(avformat_seek_file(avFormatCtx, stream->StreamIndex, min, seekTarget, max, 0), "Error occurred while seeking") < 0)
 					{
 						hr = E_FAIL;
 						DebugMessage(L" - ### Error while seeking\n");
@@ -1992,7 +2007,7 @@ HRESULT FFmpegInteropMSS::Seek(TimeSpan position, TimeSpan& actualPosition, bool
 							if (audioPreroll.Duration > 0 && config->FastSeekCleanAudio)
 							{
 								seekTarget = stream->ConvertPosition(audioTarget - audioPreroll);
-								if (av_seek_frame(avFormatCtx, stream->StreamIndex, seekTarget, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY) < 0)
+								if (FI_REPORTERR(av_seek_frame(avFormatCtx, stream->StreamIndex, seekTarget, AVSEEK_FLAG_BACKWARD | AVSEEK_FLAG_ANY), "Error occurred while seeking") < 0)
 								{
 									hr = E_FAIL;
 									DebugMessage(L" - ### Error while seeking\n");
@@ -2006,6 +2021,7 @@ HRESULT FFmpegInteropMSS::Seek(TimeSpan position, TimeSpan& actualPosition, bool
 									currentAudioStream->SkipPacketsUntilTimestamp(audioTarget);
 
 									auto sample = currentAudioStream->GetNextSample();
+									previousAudioSampleTime = GetCurrentDateTime();
 									if (sample)
 									{
 										actualPosition = sample->Timestamp + sample->Duration;
@@ -2022,6 +2038,7 @@ HRESULT FFmpegInteropMSS::Seek(TimeSpan position, TimeSpan& actualPosition, bool
 								{
 									// decode one audio sample to get clean output
 									auto sample = currentAudioStream->GetNextSample();
+									previousAudioSampleTime = GetCurrentDateTime();
 									if (sample)
 									{
 										actualPosition = sample->Timestamp + sample->Duration;
@@ -2035,7 +2052,7 @@ HRESULT FFmpegInteropMSS::Seek(TimeSpan position, TimeSpan& actualPosition, bool
 		}
 		else
 		{
-			if (av_seek_frame(avFormatCtx, stream->StreamIndex, seekTarget, AVSEEK_FLAG_BACKWARD) < 0)
+			if (FI_REPORTERR(av_seek_frame(avFormatCtx, stream->StreamIndex, seekTarget, AVSEEK_FLAG_BACKWARD), "Error occurred while seeking") < 0)
 			{
 				hr = E_FAIL;
 				DebugMessage(L" - ### Error while seeking\n");
@@ -2082,6 +2099,27 @@ void FFmpegInteropMSS::OnPositionChanged(Windows::Media::Playback::MediaPlayback
 	lastPosition = actualPosition;
 	actualPosition = sender->Position;
 	mutexGuard.unlock();
+}
+
+int FFmpegInteropMSS::_interrupt_callback() {
+	InterruptCallbackArgs^ args = ref new InterruptCallbackArgs(previousVideoSampleTime, previousAudioSampleTime);
+	OnInterruptCallback(this, args);
+	
+	if (args->ShouldInterrupt) {
+		return 1;
+	}
+	else {
+		return 0;
+	}
+}
+
+void FFmpegInteropMSS::OnAVError(FFmpegInteropMSS^ mss, AVErrorEventArgs^ args) {
+	errorContext->ReportError(args->Error, args->Message);
+}
+
+static int interrupt_callback(void* ptr) {
+	FFmpegInteropMSS^ mss = reinterpret_cast<FFmpegInteropMSS^>(ptr);
+	return mss->_interrupt_callback();
 }
 
 // Static function to read file stream and pass data to FFmpeg. Credit to Philipp Sch http://www.codeproject.com/Tips/489450/Creating-Custom-FFmpeg-IO-Context

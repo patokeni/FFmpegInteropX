@@ -33,6 +33,8 @@
 #include <collection.h>
 #include "MediaMetadata.h"
 #include <mfidl.h>
+#include "InterruptCallback.h"
+#include "ErrorHandling.h"
 
 using namespace Platform;
 using namespace Windows::Foundation;
@@ -85,6 +87,8 @@ namespace FFmpegInterop
 		static FFmpegInteropMSS^ CreateFFmpegInteropMSSFromUri(String^ uri, bool forceAudioDecode, bool forceVideoDecode, PropertySet^ ffmpegOptions);
 		[WFM::Deprecated("Use the CreateFromUriAsync method.", WFM::DeprecationType::Deprecate, 0x0)]
 		static FFmpegInteropMSS^ CreateFFmpegInteropMSSFromUri(String^ uri, bool forceAudioDecode, bool forceVideoDecode);
+
+		event InterruptCallback^ OnInterruptCallback;
 
 		///<summary>Sets the subtitle delay for all subtitle streams. Use negative values to speed them up, positive values to delay them.</summary>
 		void SetSubtitleDelay(TimeSpan delay);
@@ -312,6 +316,24 @@ namespace FFmpegInterop
 			}
 		}
 
+		property DateTime PreviousVideoSampleTime {
+			DateTime get() {
+				return previousVideoSampleTime;
+			}
+		}
+
+		property DateTime PreviousAudioSampleTime {
+			DateTime get() {
+				return previousAudioSampleTime;
+			}
+		}
+
+		property FFmpegInterop::ErrorContext^ ErrorContext {
+			FFmpegInterop::ErrorContext^ get() {
+				return errorContext;
+			}
+		}
+
 	private:
 		FFmpegInteropMSS(FFmpegInteropConfig^ config, CoreDispatcher^ dispatcher);
 
@@ -366,6 +388,8 @@ namespace FFmpegInterop
 		IStream* fileStreamData;
 		ByteOrderMark streamByteOrderMark;
 		FFmpegInteropConfig^ config;
+		int _interrupt_callback();
+		FFmpegInterop::ErrorContext^ errorContext = ref new FFmpegInterop::ErrorContext();
 
 	private:
 
@@ -427,8 +451,12 @@ namespace FFmpegInterop
 		TimeSpan actualPosition;
 		TimeSpan lastPosition;
 
+		DateTime previousVideoSampleTime;
+		DateTime previousAudioSampleTime;
+
 		static CoreDispatcher^ GetCurrentDispatcher();
 		void OnPositionChanged(Windows::Media::Playback::MediaPlaybackSession^ sender, Platform::Object^ args);
+		void OnAVError(FFmpegInteropMSS^ mss, AVErrorEventArgs^ args);
 };
 
 }

@@ -43,6 +43,9 @@ int FFmpegReader::ReadPacket()
 	}
 
 	ret = av_read_frame(m_pAvFormatCtx, avPacket);
+	if (avPacket->flags & AV_PKT_FLAG_CORRUPT) {
+		DebugMessage(L"Corrupted packet found");
+	}
 	if (ret < 0)
 	{
 		av_packet_free(&avPacket);
